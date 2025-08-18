@@ -1,12 +1,14 @@
 from django import forms
 from django.contrib.auth import password_validation
-from django.contrib.auth.forms import AuthenticationForm
-from django.contrib.auth.forms import PasswordResetForm
-from django.contrib.auth.forms import SetPasswordForm
-from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.forms import (
+    AuthenticationForm,
+    PasswordResetForm,
+    SetPasswordForm,
+    UserCreationForm,
+)
+from django.contrib.auth.models import User
 from django.core.exceptions import ObjectDoesNotExist
 from django.forms import ValidationError
-from django.contrib.auth.models import User
 
 
 class CustomAuthenticationForm(AuthenticationForm):
@@ -160,10 +162,31 @@ class CustomSetPasswordForm(SetPasswordForm):
         strip=False,
         help_text=password_validation.password_validators_help_text_html(),
     )
-    new_password2 = forms.CharField(
-        label="New password confirmation",
-        strip=False,
-        widget=forms.PasswordInput(
-            attrs={"class": "form-control foo-border", "autocomplete": "new-password"}
+
+
+class MagicLinkRequestForm(forms.Form):
+    email = forms.EmailField(
+        label="Email address",
+        max_length=254,
+        widget=forms.EmailInput(
+            attrs={
+                "class": "form-control foo-border",
+                "placeholder": "email@example.com",
+                "autocomplete": "email",
+            }
         ),
     )
+
+
+class CompleteProfileForm(forms.ModelForm):
+    class Meta:
+        model = User
+        fields = ["first_name", "last_name"]
+        widgets = {
+            "first_name": forms.TextInput(
+                attrs={"class": "form-control foo-border", "placeholder": "First name"}
+            ),
+            "last_name": forms.TextInput(
+                attrs={"class": "form-control foo-border", "placeholder": "Last name"}
+            ),
+        }

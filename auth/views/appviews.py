@@ -3,40 +3,48 @@ from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm
-from django.contrib.auth.views import LoginView
-from django.contrib.auth.views import PasswordResetCompleteView
-from django.contrib.auth.views import PasswordResetConfirmView
-from django.contrib.auth.views import PasswordResetDoneView
-from django.contrib.auth.views import PasswordResetView
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.auth.models import User
+from django.contrib.auth.views import (
+    LoginView,
+    PasswordResetCompleteView,
+    PasswordResetConfirmView,
+    PasswordResetDoneView,
+    PasswordResetView,
+)
+from django.core.mail import EmailMessage
 from django.http import HttpResponse
-from django.shortcuts import render, redirect
-from django.urls import reverse_lazy, reverse
+from django.shortcuts import redirect, render
+from django.template.loader import render_to_string
+from django.urls import reverse, reverse_lazy
 from django.utils.decorators import method_decorator
 from django.utils.encoding import force_bytes
-from django.views.generic import TemplateView
-from django.views.generic import View
+from django.views.generic import TemplateView, View
 
 try:
     from django.utils.encoding import force_text
 except ImportError:
     from django.utils.encoding import force_str as force_text
-from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
-from django.template.loader import render_to_string
-from django.core.mail import EmailMessage
+
 from django.contrib.auth.models import User
+from django.core.mail import EmailMessage
+from django.template.loader import render_to_string
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.views.generic import TemplateView, View
 
 from qux.seo.mixin import SEOMixin
-from ..tokens import account_activation_token
 
 from ..forms import (
+    BaseSignupForm,
     ChangePasswordForm,
+    CompleteProfileForm,
     CustomAuthenticationForm,
     CustomPasswordResetForm,
     CustomSetPasswordForm,
+    MagicLinkRequestForm,
     SignupForm,
-    BaseSignupForm,
 )
-
+from ..tokens import account_activation_token, magic_link_token
 
 User._meta.get_field("email")._unique = True
 
@@ -321,3 +329,159 @@ def login_request(request):
         "form": form,
     }
     return render(request, "login.html", data)
+
+
+class MagicLinkRequestView(SEOMixin, TemplateView):
+    template_name = (
+        "bs5/magic_link_request.html"
+        if getattr(settings, "BOOTSTRAP", "bs4") == "bs5"
+        else "magic_link_request.html"
+    )
+    extra_context = {
+        "title": "Email sign-in link",
+        "submit_btn_text": "Send sign-in link",
+        "base_template": getattr(settings, "ROOT_TEMPLATE", "_blank.html"),
+    }
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["form"] = MagicLinkRequestForm()
+        return ctx
+
+    def get(self, request):
+        if request.user.is_authenticated:
+            return redirect(settings.LOGIN_REDIRECT_URL)
+        return super().get(request)
+
+    def post(self, request):
+        form = MagicLinkRequestForm(request.POST)
+        if not form.is_valid():
+            return self.render_to_response({"form": form})
+
+        email = form.cleaned_data["email"].strip().lower()
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            base_username = email
+            candidate_username = base_username
+            suffix = 1
+            while User.objects.filter(username=candidate_username).exists():
+                candidate_username = f"{base_username}{suffix}"
+                suffix += 1
+            user = User.objects.create(
+                username=candidate_username,
+                email=email,
+                is_active=True,
+            )
+
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = magic_link_token.make_token(user)
+        domain = request.build_absolute_uri("/")[:-1]
+        next_path = request.GET.get("next") or request.POST.get("next")
+        callback_kwargs = {"uidb64": uid, "token": token}
+        # Use unified login link callback under /login/link/
+        callback_url = reverse("qux_auth:login_link", kwargs=callback_kwargs)
+        if next_path:
+            callback_url = f"{callback_url}?next={next_path}"
+
+        message = render_to_string(
+            "magic_link_email.html",
+            {
+                "user": user,
+                "domain": domain,
+                "magic_link_url": domain + callback_url,
+            },
+        )
+        email_obj = EmailMessage(
+            subject="Your secure sign-in link",
+            body=message,
+            to=[email],
+        )
+        email_obj.content_subtype = "html"
+        email_obj.send()
+
+        return render(
+            request,
+            "message.html",
+            {
+                "title": "Check your email",
+                "messages": [
+                    f"We sent a login link to <b>{email}</b>. It expires soon.",
+                    "Check spam if you do not see it in a couple of minutes.",
+                ],
+            },
+        )
+
+
+class MagicLinkLoginView(View):
+    @staticmethod
+    def get(request, uidb64, token):
+        try:
+            uid = force_text(urlsafe_base64_decode(uidb64))
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            user = None
+
+        if user is None or not magic_link_token.check_token(user, token):
+            return render(
+                request,
+                "message.html",
+                {
+                    "title": "Invalid link",
+                    "messages": ["Email sign-in link is invalid"],
+                },
+            )
+
+        login(request, user)
+        # If first-time login (no first_name/last_name), route to complete-profile
+        if (
+            hasattr(settings, "SHOW_COMPLETE_PROFILE_FORM")
+            and settings.SHOW_COMPLETE_PROFILE_FORM
+            and not user.first_name
+            and not user.last_name
+        ):
+            next_path = request.GET.get("next")
+            url = reverse("qux_auth:complete_profile")
+            if next_path:
+                url = f"{url}?next={next_path}"
+            return redirect(url)
+
+        redirect_to = request.GET.get("next") or settings.LOGIN_REDIRECT_URL
+        return redirect(redirect_to)
+
+
+class CompleteProfileView(LoginRequiredMixin, SEOMixin, TemplateView):
+    template_name = (
+        "bs5/complete_profile.html"
+        if getattr(settings, "BOOTSTRAP", "bs4") == "bs5"
+        else "complete_profile.html"
+    )
+    extra_context = {
+        "title": "Complete your profile",
+        "submit_btn_text": "Save and continue",
+        "base_template": getattr(settings, "ROOT_TEMPLATE", "_blank.html"),
+    }
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["form"] = CompleteProfileForm(instance=self.request.user)
+        return ctx
+
+    def get(self, request):
+        if (
+            hasattr(settings, "SHOW_COMPLETE_PROFILE_FORM")
+            and settings.SHOW_COMPLETE_PROFILE_FORM
+            and request.user.first_name
+            and request.user.last_name
+        ):
+            redirect_to = request.GET.get("next") or settings.LOGIN_REDIRECT_URL
+            return redirect(redirect_to)
+        return super().get(request)
+
+    def post(self, request):
+        form = CompleteProfileForm(request.POST, instance=request.user)
+        if not form.is_valid():
+            return self.render_to_response({"form": form})
+        form.save()
+        redirect_to = request.GET.get("next") or settings.LOGIN_REDIRECT_URL
+        return redirect(redirect_to)
