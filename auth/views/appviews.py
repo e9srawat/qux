@@ -1,3 +1,5 @@
+from typing import cast
+
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
@@ -22,9 +24,9 @@ from django.utils.encoding import force_bytes
 from django.views.generic import TemplateView, View
 
 try:
-    from django.utils.encoding import force_text
-except ImportError:
     from django.utils.encoding import force_str as force_text
+except ImportError:  # pragma: no cover
+    from django.utils.encoding import force_text  # type: ignore[attr-defined]
 
 from django.contrib.auth.models import User
 from django.core.mail import EmailMessage
@@ -46,7 +48,8 @@ from ..forms import (
 )
 from ..tokens import account_activation_token, magic_link_token
 
-User._meta.get_field("email")._unique = True
+# Ensure email field is unique at the database level via model/migration. Avoid
+# mutating field internals at runtime, which is unsafe and breaks typing.
 
 
 class QuxSignupView(View):
@@ -207,7 +210,7 @@ class QuxLoginView(SEOMixin, LoginView):
         return super().form_invalid(form)
 
 
-class QuxChangePasswordView(SEOMixin, TemplateView):
+class QuxChangePasswordView(LoginRequiredMixin, SEOMixin, TemplateView):
     form_class = ChangePasswordForm
     template_name = (
         "bs5/change-password.html"
@@ -224,10 +227,6 @@ class QuxChangePasswordView(SEOMixin, TemplateView):
         ctx["form"] = self.form_class(user=self.request.user)
         return ctx
 
-    @method_decorator(login_required)
-    def dispatch(self, request, *args, **kwargs):
-        return super().dispatch(request, *args, **kwargs)
-
     def post(self, request):
         form = self.form_class(data=request.POST, user=request.user)
         if form.is_valid():
@@ -236,7 +235,7 @@ class QuxChangePasswordView(SEOMixin, TemplateView):
             user.save()
             messages.success(request, "Password changed successfully")
             return redirect("/")
-        return render(request, self.template_name, context={"form": form})
+        return render(request, cast(str, self.template_name), context={"form": form})
 
 
 class QuxPasswordResetView(SEOMixin, PasswordResetView):
@@ -338,8 +337,8 @@ class MagicLinkRequestView(SEOMixin, TemplateView):
         else "magic_link_request.html"
     )
     extra_context = {
-        "title": "Email sign-in link",
-        "submit_btn_text": "Send sign-in link",
+        "title": "Magic link",
+        "submit_btn_text": "Send magic link",
         "base_template": getattr(settings, "ROOT_TEMPLATE", "_blank.html"),
     }
 
@@ -393,7 +392,7 @@ class MagicLinkRequestView(SEOMixin, TemplateView):
             },
         )
         email_obj = EmailMessage(
-            subject="Your secure sign-in link",
+            subject="Your magic link",
             body=message,
             to=[email],
         )
@@ -406,7 +405,7 @@ class MagicLinkRequestView(SEOMixin, TemplateView):
             {
                 "title": "Check your email",
                 "messages": [
-                    f"We sent a login link to <b>{email}</b>. It expires soon.",
+                    f"We sent a magic link to <b>{email}</b>. It expires soon.",
                     "Check spam if you do not see it in a couple of minutes.",
                 ],
             },
@@ -428,7 +427,7 @@ class MagicLinkLoginView(View):
                 "message.html",
                 {
                     "title": "Invalid link",
-                    "messages": ["Email sign-in link is invalid"],
+                    "messages": ["Magic link is invalid"],
                 },
             )
 

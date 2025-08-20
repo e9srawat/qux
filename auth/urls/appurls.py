@@ -30,23 +30,20 @@ urlpatterns = [
         QuxActivateView.as_view(),
         name="activate",
     ),
+    path(
+        "login/",
+        QuxLoginView.as_view(redirect_authenticated_user=True),
+        name="login",
+    ),
 ]
 
 # Configure the primary login route based on settings.USE_EMAIL_SIGNIN
-if hasattr(settings, "USE_EMAIL_SIGNIN") and settings.USE_EMAIL_SIGNIN:
+if hasattr(settings, "USE_MAGIC_LINK") and settings.USE_MAGIC_LINK:
     urlpatterns += [
         path(
-            "login/",
+            "magic-link/",
             MagicLinkRequestView.as_view(),
-            name="login",
-        ),
-    ]
-else:
-    urlpatterns += [
-        path(
-            "login/",
-            QuxLoginView.as_view(redirect_authenticated_user=True),
-            name="login",
+            name="magic_link",
         ),
     ]
 
