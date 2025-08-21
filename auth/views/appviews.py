@@ -383,12 +383,20 @@ class MagicLinkRequestView(SEOMixin, TemplateView):
         if next_path:
             callback_url = f"{callback_url}?next={next_path}"
 
+        hours = int(settings.PASSWORD_RESET_TIMEOUT / 3600)
+        minutes = int(settings.PASSWORD_RESET_TIMEOUT % 3600 / 60)
+
+        expiration_time = f"{hours}h"
+        if minutes > 0:
+            expiration_time += f"{minutes}m"
+
         message = render_to_string(
             "magic_link_email.html",
             {
                 "user": user,
                 "domain": domain,
                 "magic_link_url": domain + callback_url,
+                "expiration_time": expiration_time,
             },
         )
         email_obj = EmailMessage(
@@ -405,7 +413,7 @@ class MagicLinkRequestView(SEOMixin, TemplateView):
             {
                 "title": "Check your email",
                 "messages": [
-                    f"We sent a magic link to <b>{email}</b>. It expires soon.",
+                    f"We sent a magic link to <b>{email}</b>. It expires in {expiration_time}.",
                     "Check spam if you do not see it in a couple of minutes.",
                 ],
             },
