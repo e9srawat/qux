@@ -162,6 +162,13 @@ class CustomSetPasswordForm(SetPasswordForm):
         strip=False,
         help_text=password_validation.password_validators_help_text_html(),
     )
+    new_password2 = forms.CharField(
+        label="Confirm new password",
+        widget=forms.PasswordInput(
+            attrs={"class": "form-control foo-border", "autocomplete": "new-password"}
+        ),
+        strip=False,
+    )
 
 
 class MagicLinkRequestForm(forms.Form):

@@ -448,7 +448,7 @@ class MagicLinkLoginView(View):
             and not user.last_name
         ):
             next_path = request.GET.get("next")
-            url = reverse("qux_auth:complete_profile")
+            url = reverse("qux_auth:update_profile")
             if next_path:
                 url = f"{url}?next={next_path}"
             return redirect(url)
@@ -464,7 +464,7 @@ class CompleteProfileView(LoginRequiredMixin, SEOMixin, TemplateView):
         else "complete_profile.html"
     )
     extra_context = {
-        "title": "Complete your profile",
+        "title": "Update your profile",
         "submit_btn_text": "Save and continue",
         "base_template": getattr(settings, "ROOT_TEMPLATE", "_blank.html"),
     }
@@ -490,5 +490,46 @@ class CompleteProfileView(LoginRequiredMixin, SEOMixin, TemplateView):
         if not form.is_valid():
             return self.render_to_response({"form": form})
         form.save()
+        redirect_to = request.GET.get("next") or settings.LOGIN_REDIRECT_URL
+        return redirect(redirect_to)
+
+
+class QuxSetPasswordView(LoginRequiredMixin, SEOMixin, TemplateView):
+    template_name = (
+        "bs5/set_password.html"
+        if getattr(settings, "BOOTSTRAP", "bs4") == "bs5"
+        else "set_password.html"
+    )
+    extra_context = {
+        "form_title": "Set your password",
+        "submit_btn_text": "Save and continue",
+        "base_template": getattr(settings, "ROOT_TEMPLATE", "_blank.html"),
+    }
+
+    def get(self, request):
+        # If user already has a password, redirect them
+        if request.user.has_usable_password():
+            redirect_to = request.GET.get("next") or settings.LOGIN_REDIRECT_URL
+            return redirect(redirect_to)
+        return super().get(request)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["form"] = CustomSetPasswordForm(self.request.user)
+        return ctx
+
+    def post(self, request):
+        form = CustomSetPasswordForm(request.user, request.POST)
+        if not form.is_valid():
+            return self.render_to_response({"form": form})
+
+        # Set the new password
+        user = request.user
+        user.set_password(form.cleaned_data.get("new_password1"))
+        user.save()
+
+        messages.success(request, "Password set successfully!")
+
+        # Redirect to next page or default
         redirect_to = request.GET.get("next") or settings.LOGIN_REDIRECT_URL
         return redirect(redirect_to)

@@ -17,6 +17,7 @@ from ..views.appviews import (
     QuxPasswordResetConfirmView,
     QuxPasswordResetDoneView,
     QuxPasswordResetView,
+    QuxSetPasswordView,
     QuxSignupView,
     TemplateView,
 )
@@ -85,8 +86,13 @@ urlpatterns += [
         name="login_link",
     ),
     path(
-        "complete-profile/",
+        "update-profile/",
         CompleteProfileView.as_view(),
-        name="complete_profile",
+        name="update_profile",
+    ),
+    path(
+        r"set-password/",
+        QuxSetPasswordView.as_view(),
+        name="set_password",
     ),
 ]
