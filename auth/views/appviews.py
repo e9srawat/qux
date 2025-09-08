@@ -508,7 +508,7 @@ class QuxSetPasswordView(LoginRequiredMixin, SEOMixin, TemplateView):
 
     def get(self, request):
         # If user already has a password, redirect them
-        if request.user.has_usable_password():
+        if request.user.password:
             redirect_to = request.GET.get("next") or settings.LOGIN_REDIRECT_URL
             return redirect(redirect_to)
         return super().get(request)
