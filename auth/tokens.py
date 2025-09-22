@@ -16,13 +16,13 @@ account_activation_token = TokenGenerator()
 
 class MagicLinkTokenGenerator(PasswordResetTokenGenerator):
     def _make_hash_value(self, user, timestamp):
-        # Include last_login so magic links are invalidated after first use
-        last_login_text = six.text_type(user.last_login)
+        # Do NOT include last_login to avoid scanners consuming links.
+        # Include password so tokens invalidate if password changes.
         return (
             six.text_type(user.pk)
             + six.text_type(timestamp)
             + six.text_type(user.is_active)
-            + last_login_text
+            + six.text_type(user.password)
         )
 
 

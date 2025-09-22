@@ -1,3 +1,4 @@
+import logging
 from typing import cast
 
 from django.conf import settings
@@ -14,6 +15,7 @@ from django.contrib.auth.views import (
     PasswordResetDoneView,
     PasswordResetView,
 )
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.mail import EmailMessage
 from django.http import HttpResponse
 from django.shortcuts import redirect, render
@@ -31,7 +33,11 @@ except ImportError:  # pragma: no cover
 from django.contrib.auth.models import User
 from django.core.mail import EmailMessage
 from django.template.loader import render_to_string
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.utils.http import (
+    base36_to_int,
+    urlsafe_base64_decode,
+    urlsafe_base64_encode,
+)
 from django.views.generic import TemplateView, View
 
 from qux.seo.mixin import SEOMixin
@@ -102,15 +108,14 @@ class QuxSignupView(View):
 
             return render(request, "message.html", data)
 
-        errors = form.errors.as_data()
+        errors_obj = getattr(form, "errors", None)
 
-        error_messages = []
-        for _, field_errors in errors.items():
-            for error in field_errors:
-                message = (
-                    error.message % error.params if error.params else error.message
-                )
-                error_messages.append(message)
+        error_messages: list[str] = []
+        if errors_obj:
+            for field_errors in errors_obj.values():
+                for message in field_errors:
+                    if message:
+                        error_messages.append(str(message))
 
         data = {
             "title": "Invalid credentials.",
@@ -163,7 +168,7 @@ class QuxActivateView(View):
         try:
             uid = force_text(urlsafe_base64_decode(uidb64))
             user = User.objects.get(pk=uid)
-        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+        except (TypeError, ValueError, OverflowError, ObjectDoesNotExist):
             user = None
         if user is not None and account_activation_token.check_token(user, token):
             user.is_active = True
@@ -344,7 +349,11 @@ class MagicLinkRequestView(SEOMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["form"] = MagicLinkRequestForm()
+        prefill_email = self.request.GET.get("email")
+        if prefill_email:
+            ctx["form"] = MagicLinkRequestForm(initial={"email": prefill_email})
+        else:
+            ctx["form"] = MagicLinkRequestForm()
         return ctx
 
     def get(self, request):
@@ -360,7 +369,7 @@ class MagicLinkRequestView(SEOMixin, TemplateView):
         email = form.cleaned_data["email"].strip().lower()
         try:
             user = User.objects.get(email=email)
-        except User.DoesNotExist:
+        except ObjectDoesNotExist:
             base_username = email
             candidate_username = base_username
             suffix = 1
@@ -420,40 +429,123 @@ class MagicLinkRequestView(SEOMixin, TemplateView):
         )
 
 
-class MagicLinkLoginView(View):
+class MagicLinkLoginView(SEOMixin, View):
     @staticmethod
-    def get(request, uidb64, token):
+    def _get_token_status(user: User | None, token: str) -> str:
+        """Return one of: "valid", "expired", or "invalid" using public APIs."""
+        if not user or not token:
+            return "invalid"
+
+        # Extract timestamp from token
+        try:
+            ts_b36, _ = token.split("-")
+            ts = base36_to_int(ts_b36)
+        except (ValueError, TypeError):
+            return "invalid"
+
+        # Determine expiry strictly by timestamp window
+        from datetime import datetime
+
+        now_seconds = int((datetime.now() - datetime(2001, 1, 1)).total_seconds())
+        if (now_seconds - ts) > settings.PASSWORD_RESET_TIMEOUT:
+            return "expired"
+
+        # Within window → rely on Django's public check_token for validity
+        return "valid" if magic_link_token.check_token(user, token) else "invalid"
+
+    @staticmethod
+    def _log_magic_link_event(
+        request,
+        *,
+        status: str,
+        user: User | None,
+        reason: str | None = None,
+    ) -> None:
+        """Log a magic link login event for monitoring and counting."""
+        logger = logging.getLogger(__name__)
+        forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "")
+        ip = (
+            forwarded_for.split(",")[0].strip()
+            if forwarded_for
+            else request.META.get("REMOTE_ADDR", "")
+        )
+        ua = request.META.get("HTTP_USER_AGENT", "")
+        next_path = request.GET.get("next")
+        user_id = getattr(user, "id", None)
+        email = getattr(user, "email", "")
+        logger.info(
+            "magic_link_login status=%s reason=%s user_id=%s email=%s ip=%s ua=%s next=%s",
+            status,
+            reason or "",
+            user_id,
+            email,
+            ip,
+            ua,
+            next_path,
+        )
+
+    def get(self, request, uidb64, token):
         try:
             uid = force_text(urlsafe_base64_decode(uidb64))
             user = User.objects.get(pk=uid)
-        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+        except (TypeError, ValueError, OverflowError, ObjectDoesNotExist):
             user = None
 
-        if user is None or not magic_link_token.check_token(user, token):
+        status = self._get_token_status(user, token)
+
+        if status != "valid":
+            next_path = request.GET.get("next")
+            magic_link_url = reverse("qux_auth:magic_link")
+            if next_path:
+                magic_link_url = f"{magic_link_url}?next={next_path}"
+            # Pre-fill email if we could resolve the user
+            if user and user.email:
+                sep = "&" if "?" in magic_link_url else "?"
+                magic_link_url = f"{magic_link_url}{sep}email={user.email}"
+            title = "Link expired" if status == "expired" else "Invalid link"
+            reason = (
+                "This magic link has expired."
+                if status == "expired"
+                else "This magic link is invalid. Please request a new one."
+            )
+            self._log_magic_link_event(
+                request,
+                status=status,
+                user=user,
+                reason="expired" if status == "expired" else "invalid",
+            )
             return render(
                 request,
                 "message.html",
                 {
-                    "title": "Invalid link",
-                    "messages": ["Magic link is invalid"],
+                    "title": title,
+                    "messages": [
+                        reason,
+                        (
+                            f'<a class="btn btn-outline-primary btn-block w-100 py-2 mt-3" '
+                            f'href="{magic_link_url}">Get a new magic link</a>'
+                        ),
+                    ],
                 },
             )
-
+        # Proceed to login directly on GET (fast one-click flow)
+        next_path = request.GET.get("next")
         login(request, user)
+        self._log_magic_link_event(request, status="success", user=user)
         # If first-time login (no first_name/last_name), route to complete-profile
         if (
-            hasattr(settings, "SHOW_COMPLETE_PROFILE_FORM")
+            user
+            and hasattr(settings, "SHOW_COMPLETE_PROFILE_FORM")
             and settings.SHOW_COMPLETE_PROFILE_FORM
             and not user.first_name
             and not user.last_name
         ):
-            next_path = request.GET.get("next")
             url = reverse("qux_auth:update_profile")
             if next_path:
                 url = f"{url}?next={next_path}"
             return redirect(url)
 
-        redirect_to = request.GET.get("next") or settings.LOGIN_REDIRECT_URL
+        redirect_to = next_path or settings.LOGIN_REDIRECT_URL
         return redirect(redirect_to)
 
 
