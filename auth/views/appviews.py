@@ -395,9 +395,14 @@ class MagicLinkRequestView(SEOMixin, TemplateView):
         hours = int(settings.PASSWORD_RESET_TIMEOUT / 3600)
         minutes = int(settings.PASSWORD_RESET_TIMEOUT % 3600 / 60)
 
-        expiration_time = f"{hours}h"
+        expiration_time = ""
+        if hours > 0:
+            expiration_time = f"{hours} hour{'' if hours == 1 else 's'}"
         if minutes > 0:
-            expiration_time += f"{minutes}m"
+            expiration_time += (
+                f"{' and ' if hours > 0 else ''}"
+                + f"{minutes} minute{'' if minutes == 1 else 's'}"
+            )
 
         message = render_to_string(
             "magic_link_email.html",
