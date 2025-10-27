@@ -43,5 +43,41 @@ class AppSettings(object):
         """Maximum size of field to log"""
         return self._setting("MAX_SIZE", 4096)
 
+    # noinspection PyPep8Naming
+    @property
+    def ENABLED(self):
+        """Global switch to enable/disable API request logging"""
+        return self._setting("ENABLED", True)
+
+    # noinspection PyPep8Naming
+    @property
+    def ALWAYS_LOG_ERRORS(self):
+        """Always log error responses (4xx/5xx) regardless of sampling"""
+        return self._setting("ALWAYS_LOG_ERRORS", True)
+
+    # noinspection PyPep8Naming
+    @property
+    def MAX_BODY_BYTES(self):
+        """Maximum number of bytes to store for data/response fields"""
+        return self._setting("MAX_BODY_BYTES", 4096)
+
+    # noinspection PyPep8Naming
+    @property
+    def STORE_RESPONSE_ON_ERRORS_ONLY(self):
+        """If True, only store response body for error responses (status >= 400)"""
+        return self._setting("STORE_RESPONSE_ON_ERRORS_ONLY", True)
+
+    # noinspection PyPep8Naming
+    @property
+    def RETENTION_DAYS(self):
+        """Default number of days to retain API logs when pruning"""
+        return self._setting("RETENTION_DAYS", 14)
+
+    # noinspection PyPep8Naming
+    @property
+    def LOG_QUEUE(self):
+        """Celery queue name for request log persistence task"""
+        return self._setting("LOG_QUEUE", "drf_log")
+
 
 app_settings = AppSettings("DRF_TRACKING_")
